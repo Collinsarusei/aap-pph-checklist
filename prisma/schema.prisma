@@ -1,0 +1,40 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Admin {
+  id           Int            @id @default(autoincrement())
+  username     String         @unique
+  passwordHash String
+  createdAt    DateTime       @default(now())
+  sessions     AdminSession[]
+}
+
+model AdminSession {
+  id        String   @id
+  adminId   Int
+  admin     Admin    @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+}
+
+model Submission {
+  id          Int      @id @default(autoincrement())
+  department  String
+  staffName   String
+  patientName String
+  hospitalNo  String
+  assessedAt  DateTime
+  aphRisk     String?
+  pphCategory String?
+  data        Json
+  pdfPath     String?
+  createdAt   DateTime @default(now())
+
+  @@index([hospitalNo])
+  @@index([assessedAt])
+}

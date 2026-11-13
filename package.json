@@ -1,0 +1,17 @@
+{
+  "name": "maternity-forms",
+  "version": "1.0.0",
+  "private": true,
+  "description": "APH/PPH Risk Assessment Checklist - intranet form for Maternity and MCH",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "setup": "prisma migrate deploy && prisma generate",
+    "create-admin": "node create-admin.js"
+  },
+  "dependencies": {
+    "@prisma/client": "^6",
+    "express": "^4",
+    "prisma": "^6"
+  }
+}
