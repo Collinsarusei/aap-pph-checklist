@@ -17,6 +17,7 @@ const { verifyPassword, pdfToken, checkPdfToken } = require('./auth');
 
 const HOSPITAL = process.env.HOSPITAL_NAME || 'Hospital';
 const PORT = Number(process.env.PORT || 8080);
+const DEFAULT_HOSPITAL_NO = process.env.DEFAULT_HOSPITAL_NO || '10100';
 const OUTPUT_DIR = path.resolve(__dirname, process.env.OUTPUT_DIR || './output');
 const SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 const SESSION_HOURS = 12;
@@ -75,10 +76,12 @@ function validate(body) {
     v[f.id] = val;
   }
   const dept = String(body.dept || '').trim();
-  const name = String(body.name || '').trim().slice(0, 120);
+  const name = String(body.name || '').trim().slice(0, 80);
+  const desig = String(body.desig || '').trim().slice(0, 60);
   if (!FORM.departments.includes(dept)) errors.dept = 'Please choose a department';
   if (!name) errors.name = 'Please enter your name';
-  return { v, errors, dept, name };
+  else if (!desig) errors.name = 'Please enter your designation';
+  return { v, errors, dept, name, desig };
 }
 
 // ---------------------------------------------------------------- PDF
@@ -112,31 +115,43 @@ function loginBlocked(ip) { const f = loginFails.get(ip); return f && f.count >=
 app.get('/', (req, res) => res.send(V.startPage({ hospitalName: HOSPITAL, error: req.query.err })));
 
 app.get('/form', (req, res) => {
-  const dept = String(req.query.dept || ''); const name = String(req.query.name || '').trim().slice(0, 120);
-  if (!FORM.departments.includes(dept) || !name) return res.redirect(withMsg('/', null, 'Please choose a department and enter your name.'));
-  res.send(V.formPage({ dept, name, v: { assessed_at: localIso(new Date()) }, errors: {}, hospitalName: HOSPITAL }));
+  const dept = String(req.query.dept || '');
+  const name = String(req.query.name || '').trim().slice(0, 80);
+  const desig = String(req.query.desig || '').trim().slice(0, 60);
+  if (!FORM.departments.includes(dept) || !name || !desig) return res.redirect(withMsg('/', null, 'Please choose a department and enter your name and designation.'));
+  // Defaults: hospital number, assessment time, and the assessor taken from the start page.
+  const v = { hospital_no: DEFAULT_HOSPITAL_NO, assessed_at: localIso(new Date()), assessor_name: `${name}, ${desig}` };
+  res.send(V.formPage({ dept, name, desig, v, errors: {}, hospitalName: HOSPITAL, fresh: true }));
+});
+
+// "Back to edit" from the preview: reopen the form with the previewed answers.
+app.post('/edit', (req, res) => {
+  if (!sameOrigin(req)) return res.status(403).send('Forbidden');
+  const { v, errors, dept, name, desig } = validate(req.body);
+  if (errors.dept || errors.name) return res.redirect(withMsg('/', null, 'Please choose a department and enter your name and designation.'));
+  res.send(V.formPage({ dept, name, desig, v, errors: {}, hospitalName: HOSPITAL }));
 });
 
 app.post('/preview', (req, res) => {
   if (!sameOrigin(req)) return res.status(403).send('Forbidden');
-  const { v, errors, dept, name } = validate(req.body);
-  if (errors.dept || errors.name) return res.redirect(withMsg('/', null, 'Please choose a department and enter your name.'));
-  if (Object.keys(errors).length) return res.status(400).send(V.formPage({ dept, name, v, errors, hospitalName: HOSPITAL }));
-  res.send(V.previewPage({ dept, name, v, hospitalName: HOSPITAL }));
+  const { v, errors, dept, name, desig } = validate(req.body);
+  if (errors.dept || errors.name) return res.redirect(withMsg('/', null, 'Please choose a department and enter your name and designation.'));
+  if (Object.keys(errors).length) return res.status(400).send(V.formPage({ dept, name, desig, v, errors, hospitalName: HOSPITAL }));
+  res.send(V.previewPage({ dept, name, desig, v, hospitalName: HOSPITAL }));
 });
 
 app.post('/submit', async (req, res) => {
   if (!sameOrigin(req)) return res.status(403).send('Forbidden');
-  const { v, errors, dept, name } = validate(req.body);
-  if (errors.dept || errors.name) return res.redirect(withMsg('/', null, 'Please choose a department and enter your name.'));
-  if (Object.keys(errors).length) return res.status(400).send(V.formPage({ dept, name, v, errors, hospitalName: HOSPITAL }));
+  const { v, errors, dept, name, desig } = validate(req.body);
+  if (errors.dept || errors.name) return res.redirect(withMsg('/', null, 'Please choose a department and enter your name and designation.'));
+  if (Object.keys(errors).length) return res.status(400).send(V.formPage({ dept, name, desig, v, errors, hospitalName: HOSPITAL }));
   const record = await prisma.submission.create({
-    data: { department: dept, staffName: name, patientName: v.patient_name, hospitalNo: v.hospital_no, assessedAt: new Date(v.assessed_at), aphRisk: v.aph_risk || null, pphCategory: v.pph_category || null, data: v },
+    data: { department: dept, staffName: `${name}, ${desig}`, patientName: v.patient_name, hospitalNo: v.hospital_no, assessedAt: new Date(v.assessed_at), aphRisk: v.aph_risk || null, pphCategory: v.pph_category || null, data: v },
   });
   let pdfPath = null;
-  try { pdfPath = await writePdf(record); log(`saved ${V.formNo(record.id)} by ${name} (${dept}) -> ${pdfPath}`); }
+  try { pdfPath = await writePdf(record); log(`saved ${V.formNo(record.id)} by ${name}, ${desig} (${dept}) -> ${pdfPath}`); }
   catch (e) { log(`PDF FAILED for ${V.formNo(record.id)}: ${e.message}`); }
-  res.send(V.successPage({ record: { ...record, pdfPath }, pdfUrl: `/pdf/${record.id}?t=${pdfToken(SECRET, record.id)}`, hospitalName: HOSPITAL }));
+  res.send(V.successPage({ record: { ...record, pdfPath }, pdfUrl: `/pdf/${record.id}?t=${pdfToken(SECRET, record.id)}`, hospitalName: HOSPITAL, name, desig }));
 });
 
 app.get('/pdf/:id', async (req, res) => {

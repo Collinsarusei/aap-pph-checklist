@@ -24,12 +24,19 @@ function layout({ title, body, hospitalName, admin = null, extraHead = '' }) {
 </body></html>`;
 }
 
+function staffQS(dept, name, desig) {
+  return `dept=${encodeURIComponent(dept)}&name=${encodeURIComponent(name)}&desig=${encodeURIComponent(desig)}`;
+}
+function staffHidden(dept, name, desig) {
+  return `<input type="hidden" name="dept" value="${esc(dept)}"><input type="hidden" name="name" value="${esc(name)}"><input type="hidden" name="desig" value="${esc(desig)}">`;
+}
+
 // ---------------------------------------------------------------- start page
 function startPage({ hospitalName, error }) {
   return layout({ title: 'Start', hospitalName, body: `
   <div class="card start">
     <h1>APH/PPH Risk Assessment Checklist</h1>
-    <p class="note">Choose your department and enter your name to begin. Your form is saved in this browser as you type, so you can close the page and continue later.</p>
+    <p class="note">Choose your department and enter your name and designation to begin. Your form is saved in this browser as you type, so you can close the page and continue later.</p>
     ${error ? `<div class="error">${esc(error)}</div>` : ''}
     <div id="draftBox" class="warnbox" hidden>
       <b>You have an unfinished form</b> <span id="draftInfo"></span><br>
@@ -44,8 +51,12 @@ function startPage({ hospitalName, error }) {
       <div class="deptpick">
         ${FORM.departments.map((d) => `<label class="deptopt"><input type="radio" name="dept" value="${esc(d)}" required> <span>${esc(d)}</span></label>`).join('')}
       </div>
-      <label class="req" for="name" style="margin-top:14px">Your name and designation</label>
-      <input id="name" type="text" name="name" placeholder="Example: Mary Njeri, Nursing Officer" required maxlength="120" autocomplete="off">
+      <div class="grid" style="margin-top:14px">
+        <div><label class="req" for="name">Your name</label>
+          <input id="name" type="text" name="name" placeholder="Example: Mary Njeri" required maxlength="80" autocomplete="off"></div>
+        <div><label class="req" for="desig">Designation</label>
+          <input id="desig" type="text" name="desig" placeholder="Example: Nursing Officer" required maxlength="60" autocomplete="off"></div>
+      </div>
       <div class="actions"><button class="btn" type="submit">Open the checklist</button></div>
     </form>
   </div>
@@ -57,8 +68,8 @@ function startPage({ hospitalName, error }) {
       if (draft && draft.values) {
         var box = document.getElementById('draftBox');
         var who = (draft.values.patient_name || draft.values.hospital_no) ? ' for ' + (draft.values.patient_name || '') + (draft.values.hospital_no ? ' (Hospital No. ' + draft.values.hospital_no + ')' : '') : '';
-        document.getElementById('draftInfo').textContent = who + ', saved ' + new Date(draft.savedAt).toLocaleString() + ' by ' + draft.name + ' (' + draft.dept + ').';
-        document.getElementById('draftContinue').href = '/form?dept=' + encodeURIComponent(draft.dept) + '&name=' + encodeURIComponent(draft.name);
+        document.getElementById('draftInfo').textContent = who + ', saved ' + new Date(draft.savedAt).toLocaleString() + ' by ' + draft.name + (draft.desig ? ', ' + draft.desig : '') + ' (' + draft.dept + ').';
+        document.getElementById('draftContinue').href = '/form?dept=' + encodeURIComponent(draft.dept) + '&name=' + encodeURIComponent(draft.name) + '&desig=' + encodeURIComponent(draft.desig || '');
         var dBtn = document.getElementById('draftDiscard'), dConf = document.getElementById('draftConfirm');
         dBtn.onclick = function () { dBtn.hidden = true; dConf.hidden = false; };
         document.getElementById('draftNo').onclick = function () { dConf.hidden = true; dBtn.hidden = false; };
@@ -114,15 +125,14 @@ function footnote(fn) {
 }
 
 // ---------------------------------------------------------------- the checklist page
-function formPage({ dept, name, v, errors, hospitalName }) {
+function formPage({ dept, name, desig, v, errors, hospitalName, fresh = false }) {
   const errList = Object.keys(errors);
   const body = `
   <form method="post" action="/preview" id="assessment" autocomplete="off">
-  <input type="hidden" name="dept" value="${esc(dept)}">
-  <input type="hidden" name="name" value="${esc(name)}">
+  ${staffHidden(dept, name, desig)}
   <div class="card">
     <h1>APH/PPH risk assessment</h1>
-    <p class="note">Filling as <b>${esc(name)}</b>, <b>${esc(dept)}</b> <a href="/">(change)</a>. Saved automatically in this browser while you type.</p>
+    <p class="note">Filling as <b>${esc(name)}</b>, ${esc(desig)}, <b>${esc(dept)}</b> <a href="/">(change)</a>. Saved automatically in this browser while you type.</p>
     <div id="draftNote" class="success" hidden>Restored your unfinished form (saved <span id="draftWhen"></span>). <button type="button" class="btn small secondary" id="draftClear">Start blank instead</button>
       <span id="clearConfirm" hidden>This throws away the restored answers. <button type="button" class="btn small danger" id="clearYes">Yes, start blank</button> <button type="button" class="btn small secondary" id="clearNo">Keep them</button></span></div>
     ${errList.length ? `<div class="error"><b>Please correct the following:</b><ul>${errList.map((k) => `<li>${esc(errors[k])}</li>`).join('')}</ul></div>` : ''}
@@ -158,11 +168,11 @@ function formPage({ dept, name, v, errors, hospitalName }) {
     var KEY = 'aphpph:draft';
     function collect() {
       var o = {}; var fd = new FormData(form);
-      fd.forEach(function (val, k) { if (k !== 'dept' && k !== 'name') o[k] = val; });
+      fd.forEach(function (val, k) { if (k !== 'dept' && k !== 'name' && k !== 'desig') o[k] = val; });
       return o;
     }
     function save() {
-      try { localStorage.setItem(KEY, JSON.stringify({ dept: form.dept.value, name: form.name.value, savedAt: Date.now(), values: collect() })); } catch (e) {}
+      try { localStorage.setItem(KEY, JSON.stringify({ dept: form.dept.value, name: form.name.value, desig: form.desig.value, savedAt: Date.now(), values: collect() })); } catch (e) {}
     }
     function restore(values) {
       Object.keys(values).forEach(function (k) {
@@ -175,7 +185,7 @@ function formPage({ dept, name, v, errors, hospitalName }) {
     }
     try {
       var draft = JSON.parse(localStorage.getItem(KEY) || 'null');
-      var serverHasValues = ${JSON.stringify(Object.keys(v).some((k) => k !== 'assessed_at' && v[k]))};
+      var serverHasValues = ${JSON.stringify(!fresh)};
       if (draft && draft.values && !serverHasValues) {
         restore(draft.values);
         document.getElementById('draftWhen').textContent = new Date(draft.savedAt).toLocaleString();
@@ -280,27 +290,27 @@ function printBody(d, m) {
 }
 
 // ---------------------------------------------------------------- preview + success
-function previewPage({ dept, name, v, hospitalName }) {
+function previewPage({ dept, name, desig, v, hospitalName }) {
   const hidden = Object.entries(v).map(([k, val]) => `<input type="hidden" name="${esc(k)}" value="${esc(val)}">`).join('');
   const bar = `
     <div class="actions">
-      <form method="post" action="/submit">${hidden}<input type="hidden" name="dept" value="${esc(dept)}"><input type="hidden" name="name" value="${esc(name)}">
+      <form method="post" action="/submit">${hidden}${staffHidden(dept, name, desig)}
         <button class="btn" type="submit">Save and submit</button></form>
-      <a class="btn secondary" href="/form?dept=${encodeURIComponent(dept)}&name=${encodeURIComponent(name)}">Back to edit</a>
+      <form method="post" action="/edit">${hidden}${staffHidden(dept, name, desig)}<button class="btn secondary" type="submit">Back to edit</button></form>
     </div>`;
   return layout({ title: 'Preview', hospitalName, extraHead: `<style>${PRINT_CSS}</style>`, body: `
   <div class="card"><h1>Preview</h1><p class="note">Check the form below. Nothing has been saved yet. Use <b>Back to edit</b> to change anything, or <b>Save and submit</b> to file it.</p>${bar}</div>
-  <div class="card">${printBody(v, { hospitalName, department: dept, staffName: name, recordId: null, savedAt: null })}</div>
+  <div class="card">${printBody(v, { hospitalName, department: dept, staffName: `${name}, ${desig}`, recordId: null, savedAt: null })}</div>
   <div class="card">${bar}</div>` });
 }
 
-function successPage({ record, pdfUrl, hospitalName }) {
+function successPage({ record, pdfUrl, hospitalName, name, desig }) {
   return layout({ title: 'Saved', hospitalName, body: `
   <div class="card start">
     <h1>Saved</h1>
     <div class="success">Assessment <b>${esc(formNo(record.id))}</b> for <b>${esc(record.patientName)}</b> (Hospital No. ${esc(record.hospitalNo)}) has been filed under ${esc(record.department)}.</div>
     ${record.pdfPath ? `<p><a class="btn" href="${esc(pdfUrl)}" target="_blank">Open the PDF</a> <span class="hint">(this link works for 12 hours)</span></p>` : '<div class="error">The record was saved but the PDF file could not be written. Please tell ICT; they can regenerate it.</div>'}
-    <div class="actions" style="margin-top:20px"><a class="btn secondary" href="/form?dept=${encodeURIComponent(record.department)}&name=${encodeURIComponent(record.staffName)}">Fill another form</a> <a class="btn secondary" href="/">Start page</a></div>
+    <div class="actions" style="margin-top:20px"><a class="btn secondary" href="/form?${staffQS(record.department, name, desig)}">Fill another form</a> <a class="btn secondary" href="/">Start page</a></div>
   </div>
   <script>try { localStorage.removeItem('aphpph:draft'); } catch (e) {}</script>` });
 }
