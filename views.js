@@ -18,7 +18,7 @@ function layout({ title, body, hospitalName, admin = null, extraHead = '' }) {
 <body>
 <header class="topbar">
   <a class="brand" href="/">${esc(hospitalName)} · APH/PPH Risk Assessment</a>
-  ${admin ? `<nav><a href="/admin">Submissions</a></nav><span class="who">Admin: ${esc(admin.username)} <form method="post" action="/admin/logout"><button type="submit">Log out</button></form></span>` : `<a class="lock" href="/admin" title="Admin sign in" aria-label="Admin sign in"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Admin</span></a>`}
+  ${admin ? `<nav><a href="/admin">Submissions</a><a href="/" target="_blank">New form</a></nav><span class="who">Admin: ${esc(admin.username)} <form method="post" action="/admin/logout"><button type="submit">Log out</button></form></span>` : `<a class="lock" href="/admin" title="Admin sign in" aria-label="Admin sign in"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Admin</span></a>`}
 </header>
 <main>${body}</main>
 </body></html>`;
@@ -32,7 +32,7 @@ function staffHidden(dept, name, desig) {
 }
 
 // ---------------------------------------------------------------- start page
-function startPage({ hospitalName, error }) {
+function startPage({ hospitalName, error, pre = {} }) {
   return layout({ title: 'Start', hospitalName, body: `
   <div class="card start">
     <h1>APH/PPH Risk Assessment Checklist</h1>
@@ -40,6 +40,7 @@ function startPage({ hospitalName, error }) {
     ${error ? `<div class="error">${esc(error)}</div>` : ''}
     <div id="draftBox" class="warnbox" hidden>
       <b>You have an unfinished form</b> <span id="draftInfo"></span><br>
+      <p id="draftMissing" class="hint" hidden><b>Please type your name and designation below, then press Open the checklist.</b> Your answers will come back.</p>
       <div class="actions" style="margin:8px 0 0">
         <a class="btn" id="draftContinue" href="/form">Continue it</a>
         <button class="btn secondary" id="draftDiscard" type="button">Discard it</button>
@@ -49,13 +50,13 @@ function startPage({ hospitalName, error }) {
     <form method="get" action="/form" id="start">
       <label class="req">Department</label>
       <div class="deptpick">
-        ${FORM.departments.map((d) => `<label class="deptopt"><input type="radio" name="dept" value="${esc(d)}" required> <span>${esc(d)}</span></label>`).join('')}
+        ${FORM.departments.map((d) => `<label class="deptopt"><input type="radio" name="dept" value="${esc(d)}" required${pre.dept === d ? ' checked' : ''}> <span>${esc(d)}</span></label>`).join('')}
       </div>
       <div class="grid" style="margin-top:14px">
         <div><label class="req" for="name">Your name</label>
-          <input id="name" type="text" name="name" placeholder="Example: Mary Njeri" required maxlength="80" autocomplete="off"></div>
+          <input id="name" type="text" name="name" value="${esc(pre.name || '')}" placeholder="Example: Mary Njeri" required maxlength="80" autocomplete="off"></div>
         <div><label class="req" for="desig">Designation</label>
-          <input id="desig" type="text" name="desig" placeholder="Example: Nursing Officer" required maxlength="60" autocomplete="off"></div>
+          <input id="desig" type="text" name="desig" value="${esc(pre.desig || '')}" placeholder="Example: Nursing Officer" required maxlength="60" autocomplete="off"></div>
       </div>
       <div class="actions"><button class="btn" type="submit">Open the checklist</button></div>
     </form>
@@ -68,8 +69,25 @@ function startPage({ hospitalName, error }) {
       if (draft && draft.values) {
         var box = document.getElementById('draftBox');
         var who = (draft.values.patient_name || draft.values.hospital_no) ? ' for ' + (draft.values.patient_name || '') + (draft.values.hospital_no ? ' (Hospital No. ' + draft.values.hospital_no + ')' : '') : '';
-        document.getElementById('draftInfo').textContent = who + ', saved ' + new Date(draft.savedAt).toLocaleString() + ' by ' + draft.name + (draft.desig ? ', ' + draft.desig : '') + ' (' + draft.dept + ').';
-        document.getElementById('draftContinue').href = '/form?dept=' + encodeURIComponent(draft.dept) + '&name=' + encodeURIComponent(draft.name) + '&desig=' + encodeURIComponent(draft.desig || '');
+        // Drafts saved before the designation box existed hold "Name, Designation" in one field.
+        var dn = String(draft.name || ''), dd = String(draft.desig || ''), dp = String(draft.dept || '');
+        if (!dd && dn.indexOf(',') > 0) { dd = dn.slice(dn.indexOf(',') + 1).trim(); dn = dn.slice(0, dn.indexOf(',')).trim(); }
+        document.getElementById('draftInfo').textContent = who + ', saved ' + new Date(draft.savedAt).toLocaleString() + (dn ? ' by ' + dn + (dd ? ', ' + dd : '') : '') + (dp ? ' (' + dp + ')' : '') + '.';
+        var cont = document.getElementById('draftContinue'), sf = document.getElementById('start');
+        if (dp && dn && dd) {
+          cont.href = '/form?dept=' + encodeURIComponent(dp) + '&name=' + encodeURIComponent(dn) + '&desig=' + encodeURIComponent(dd);
+        } else {
+          cont.href = '#start';
+          cont.onclick = function (e) {
+            e.preventDefault();
+            sf.querySelectorAll('input[name=dept]').forEach(function (r) { if (r.value === dp) r.checked = true; });
+            if (dn && !sf.name.value) sf.name.value = dn;
+            if (dd && !sf.desig.value) sf.desig.value = dd;
+            document.getElementById('draftMissing').hidden = false;
+            var empty = !sf.name.value ? sf.name : (!sf.desig.value ? sf.desig : null);
+            if (empty) empty.focus(); else sf.requestSubmit();
+          };
+        }
         var dBtn = document.getElementById('draftDiscard'), dConf = document.getElementById('draftConfirm');
         dBtn.onclick = function () { dBtn.hidden = true; dConf.hidden = false; };
         document.getElementById('draftNo').onclick = function () { dConf.hidden = true; dBtn.hidden = false; };
@@ -125,21 +143,25 @@ function footnote(fn) {
 }
 
 // ---------------------------------------------------------------- the checklist page
-function formPage({ dept, name, desig, v, errors, hospitalName, fresh = false }) {
+function formPage({ dept, name, desig, v, errors, hospitalName, fresh = false, admin = null, recordId = null, staffName = '' }) {
+  const isAdmin = !!admin;
   const errList = Object.keys(errors);
   const body = `
-  <form method="post" action="/preview" id="assessment" autocomplete="off">
-  ${staffHidden(dept, name, desig)}
+  <form method="post" action="${isAdmin ? `/admin/records/${recordId}/edit` : '/preview'}" id="assessment" autocomplete="off">
+  ${isAdmin ? '' : staffHidden(dept, name, desig)}
   <div class="card">
-    <h1>APH/PPH risk assessment</h1>
+    ${isAdmin ? `<h1>Edit ${esc(formNo(recordId))}</h1>
+    <p class="note">You are changing a submitted record. <b>Save changes</b> updates it and redraws its PDF. <a href="/admin/records/${recordId}">Cancel</a></p>` : `<h1>APH/PPH risk assessment</h1>
     <p class="note">Filling as <b>${esc(name)}</b>, ${esc(desig)}, <b>${esc(dept)}</b> <a href="/">(change)</a>. Saved automatically in this browser while you type.</p>
     <div id="draftNote" class="success" hidden>Restored your unfinished form (saved <span id="draftWhen"></span>). <button type="button" class="btn small secondary" id="draftClear">Start blank instead</button>
-      <span id="clearConfirm" hidden>This throws away the restored answers. <button type="button" class="btn small danger" id="clearYes">Yes, start blank</button> <button type="button" class="btn small secondary" id="clearNo">Keep them</button></span></div>
+      <span id="clearConfirm" hidden>This throws away the restored answers. <button type="button" class="btn small danger" id="clearYes">Yes, start blank</button> <button type="button" class="btn small secondary" id="clearNo">Keep them</button></span></div>`}
     ${errList.length ? `<div class="error"><b>Please correct the following:</b><ul>${errList.map((k) => `<li>${esc(errors[k])}</li>`).join('')}</ul></div>` : ''}
     <div class="grid">
       <div><label>Hospital</label><input type="text" value="${esc(hospitalName)}" readonly></div>
-      <div><label>Department</label><input type="text" value="${esc(dept)}" readonly></div>
-      <div><label>Form No.</label><input type="text" value="assigned when saved" readonly></div>
+      ${isAdmin ? `<div><label class="req">Department</label><select name="dept">${FORM.departments.map((d) => `<option${d === dept ? ' selected' : ''}>${esc(d)}</option>`).join('')}</select></div>
+      <div><label>Form No.</label><input type="text" value="${esc(formNo(recordId))}" readonly></div>
+      <div><label class="req">Completed by (name, designation)</label><input type="text" name="staff" value="${esc(staffName)}" maxlength="150" required${errors.staff ? ' class="invalid"' : ''}></div>` : `<div><label>Department</label><input type="text" value="${esc(dept)}" readonly></div>
+      <div><label>Form No.</label><input type="text" value="assigned when saved" readonly></div>`}
       ${FORM.header.map((f) => inputField(f, v, errors)).join('')}
     </div>
   </div>
@@ -157,8 +179,9 @@ function formPage({ dept, name, desig, v, errors, hospitalName, fresh = false })
 
   <div class="card sticky-save">
     <div class="actions">
-      <button class="btn" type="submit">Preview</button>
-      <span class="muted">You will see the completed form before saving it.</span>
+      ${isAdmin ? `<button class="btn" type="submit">Save changes</button>
+      <a class="btn secondary" href="/admin/records/${recordId}">Cancel</a>` : `<button class="btn" type="submit">Preview</button>
+      <span class="muted">You will see the completed form before saving it.</span>`}
     </div>
   </div>
   </form>
@@ -166,12 +189,14 @@ function formPage({ dept, name, desig, v, errors, hospitalName, fresh = false })
   (function () {
     var form = document.getElementById('assessment');
     var KEY = 'aphpph:draft';
+    var STAFF = ${JSON.stringify(!isAdmin)}; // admin edits never touch the browser draft
     function collect() {
       var o = {}; var fd = new FormData(form);
       fd.forEach(function (val, k) { if (k !== 'dept' && k !== 'name' && k !== 'desig') o[k] = val; });
       return o;
     }
     function save() {
+      if (!STAFF) return;
       try { localStorage.setItem(KEY, JSON.stringify({ dept: form.dept.value, name: form.name.value, desig: form.desig.value, savedAt: Date.now(), values: collect() })); } catch (e) {}
     }
     function restore(values) {
@@ -186,16 +211,18 @@ function formPage({ dept, name, desig, v, errors, hospitalName, fresh = false })
     try {
       var draft = JSON.parse(localStorage.getItem(KEY) || 'null');
       var serverHasValues = ${JSON.stringify(!fresh)};
-      if (draft && draft.values && !serverHasValues) {
+      if (STAFF && draft && draft.values && !serverHasValues) {
         restore(draft.values);
         document.getElementById('draftWhen').textContent = new Date(draft.savedAt).toLocaleString();
         document.getElementById('draftNote').hidden = false;
       }
     } catch (e) {}
+    if (STAFF) {
     var cBtn = document.getElementById('draftClear'), cConf = document.getElementById('clearConfirm');
     cBtn.onclick = function () { cBtn.hidden = true; cConf.hidden = false; };
     document.getElementById('clearNo').onclick = function () { cConf.hidden = true; cBtn.hidden = false; };
     document.getElementById('clearYes').onclick = function () { localStorage.removeItem(KEY); location.reload(); };
+    }
     form.addEventListener('input', save);
     form.addEventListener('change', save);
     // Clicking an already-selected radio clears it (fixes mis-ticks).
@@ -212,7 +239,7 @@ function formPage({ dept, name, desig, v, errors, hospitalName, fresh = false })
     sync();
   })();
   </script>`;
-  return layout({ title: 'Checklist', hospitalName, body });
+  return layout({ title: isAdmin ? 'Edit record' : 'Checklist', hospitalName, body, admin });
 }
 
 // ---------------------------------------------------------------- printable record (shared by preview, admin view, HTML)
@@ -372,7 +399,7 @@ function adminList({ admin, rows, f, hospitalName, q }) {
         <td><span class="badge ${esc(r.pphCategory || '')}">${esc(r.pphCategory || '')}</span></td>
         <td>${esc(fmtDT(r.createdAt))}</td>
         <td>${r.pdfPath ? `<a href="/pdf/${r.id}" target="_blank">Open</a>` : '<span class="muted">missing</span>'}</td>
-        <td><a class="btn small secondary" href="/admin/records/${r.id}">View</a></td>
+        <td style="white-space:nowrap"><a class="btn small secondary" href="/admin/records/${r.id}">View</a> <a class="btn small secondary" href="/admin/records/${r.id}/edit">Edit</a></td>
       </tr>`).join('')}
       </tbody>
     </table>
@@ -387,11 +414,23 @@ function adminRecord({ admin, record, hospitalName, q }) {
     <div class="actions">
       ${record.pdfPath ? `<a class="btn" href="/pdf/${record.id}" target="_blank">Open PDF</a>` : '<span class="muted">No PDF stored.</span>'}
       <form method="post" action="/admin/records/${record.id}/regenerate"><button class="btn secondary" type="submit">Regenerate PDF</button></form>
+      <a class="btn secondary" href="/admin/records/${record.id}/edit">Edit</a>
       <a class="btn secondary" href="/admin">Back to list</a>
+      <button class="btn danger" type="button" id="delBtn">Delete</button>
+      <span id="delConfirm" hidden>Delete ${esc(formNo(record.id))} for ${esc(record.patientName)}? This cannot be undone.
+        <form method="post" action="/admin/records/${record.id}/delete" style="display:inline"><button class="btn small danger" type="submit">Yes, delete</button></form>
+        <button class="btn small secondary" type="button" id="delNo">Keep it</button></span>
     </div>
     <p class="hint">PDF file: ${esc(record.pdfPath || 'not generated')} · submitted ${esc(fmtDT(record.createdAt))}</p>
   </div>
-  <div class="card">${printBody(record.data, { hospitalName, department: record.department, staffName: record.staffName, recordId: record.id, savedAt: record.createdAt })}</div>` });
+  <div class="card">${printBody(record.data, { hospitalName, department: record.department, staffName: record.staffName, recordId: record.id, savedAt: record.createdAt })}</div>
+  <script>
+  (function () {
+    var b = document.getElementById('delBtn'), c = document.getElementById('delConfirm');
+    b.onclick = function () { b.hidden = true; c.hidden = false; };
+    document.getElementById('delNo').onclick = function () { c.hidden = true; b.hidden = false; };
+  })();
+  </script>` });
 }
 
 function errorPage({ status, message, hospitalName, admin }) {

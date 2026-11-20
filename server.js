@@ -17,7 +17,6 @@ const { verifyPassword, pdfToken, checkPdfToken } = require('./auth');
 
 const HOSPITAL = process.env.HOSPITAL_NAME || 'Hospital';
 const PORT = Number(process.env.PORT || 8080);
-const DEFAULT_HOSPITAL_NO = process.env.DEFAULT_HOSPITAL_NO || '10100';
 const OUTPUT_DIR = path.resolve(__dirname, process.env.OUTPUT_DIR || './output');
 const SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 const SESSION_HOURS = 12;
@@ -25,6 +24,14 @@ const FIELDS = allFields();
 
 const prisma = new PrismaClient();
 const app = express();
+// Express 4 does not catch errors thrown by async route handlers; without this a database
+// error crashes the whole app. Route them to the error handler at the bottom instead.
+for (const m of ['get', 'post']) {
+  const orig = app[m].bind(app);
+  app[m] = (route, ...handlers) => orig(route, ...handlers.map((h) => (typeof h !== 'function' ? h : (req, res, next) => {
+    try { const r = h(req, res, next); if (r && typeof r.catch === 'function') r.catch(next); } catch (e) { next(e); }
+  })));
+}
 app.disable('x-powered-by');
 app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 app.use('/style.css', express.static(path.join(__dirname, 'public', 'style.css'), { maxAge: '5m' }));
@@ -52,11 +59,15 @@ function withMsg(to, msg, err) {
   if (err) u.searchParams.set('err', err);
   return u.pathname + u.search;
 }
+function startAgain(dept, name, desig) {
+  const qs = new URLSearchParams({ dept: dept || '', name: name || '', desig: desig || '' });
+  return withMsg('/?' + qs, null, 'Please choose a department and enter your name and designation.');
+}
 function safeName(s) { return String(s).replace(/[^A-Za-z0-9-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'NA'; }
 function localIso(d) { const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; }
 
 // Validation: returns clean values and a map of field -> error message.
-function validate(body) {
+function validateAnswers(body) {
   const v = {}; const errors = {};
   for (const f of FIELDS) {
     let val = String(body[f.id] ?? '').trim();
@@ -75,6 +86,10 @@ function validate(body) {
     if (f.required && !val) errors[f.id] = `${f.label} is required`;
     v[f.id] = val;
   }
+  return { v, errors };
+}
+function validate(body) {
+  const { v, errors } = validateAnswers(body);
   const dept = String(body.dept || '').trim();
   const name = String(body.name || '').trim().slice(0, 80);
   const desig = String(body.desig || '').trim().slice(0, 60);
@@ -112,15 +127,16 @@ const loginFails = new Map();
 function loginBlocked(ip) { const f = loginFails.get(ip); return f && f.count >= 10 && Date.now() - f.last < 5 * 60e3; }
 
 // ---------------------------------------------------------------- staff flow
-app.get('/', (req, res) => res.send(V.startPage({ hospitalName: HOSPITAL, error: req.query.err })));
+app.get('/', (req, res) => res.send(V.startPage({ hospitalName: HOSPITAL, error: req.query.err,
+  pre: { dept: String(req.query.dept || ''), name: String(req.query.name || ''), desig: String(req.query.desig || '') } })));
 
 app.get('/form', (req, res) => {
   const dept = String(req.query.dept || '');
   const name = String(req.query.name || '').trim().slice(0, 80);
   const desig = String(req.query.desig || '').trim().slice(0, 60);
-  if (!FORM.departments.includes(dept) || !name || !desig) return res.redirect(withMsg('/', null, 'Please choose a department and enter your name and designation.'));
-  // Defaults: hospital number, assessment time, and the assessor taken from the start page.
-  const v = { hospital_no: DEFAULT_HOSPITAL_NO, assessed_at: localIso(new Date()), assessor_name: `${name}, ${desig}` };
+  if (!FORM.departments.includes(dept) || !name || !desig) return res.redirect(startAgain(dept, name, desig));
+  // Defaults: assessment time now, and the assessor taken from the start page.
+  const v = { assessed_at: localIso(new Date()), assessor_name: `${name}, ${desig}` };
   res.send(V.formPage({ dept, name, desig, v, errors: {}, hospitalName: HOSPITAL, fresh: true }));
 });
 
@@ -128,14 +144,14 @@ app.get('/form', (req, res) => {
 app.post('/edit', (req, res) => {
   if (!sameOrigin(req)) return res.status(403).send('Forbidden');
   const { v, errors, dept, name, desig } = validate(req.body);
-  if (errors.dept || errors.name) return res.redirect(withMsg('/', null, 'Please choose a department and enter your name and designation.'));
+  if (errors.dept || errors.name) return res.redirect(startAgain(dept, name, desig));
   res.send(V.formPage({ dept, name, desig, v, errors: {}, hospitalName: HOSPITAL }));
 });
 
 app.post('/preview', (req, res) => {
   if (!sameOrigin(req)) return res.status(403).send('Forbidden');
   const { v, errors, dept, name, desig } = validate(req.body);
-  if (errors.dept || errors.name) return res.redirect(withMsg('/', null, 'Please choose a department and enter your name and designation.'));
+  if (errors.dept || errors.name) return res.redirect(startAgain(dept, name, desig));
   if (Object.keys(errors).length) return res.status(400).send(V.formPage({ dept, name, desig, v, errors, hospitalName: HOSPITAL }));
   res.send(V.previewPage({ dept, name, desig, v, hospitalName: HOSPITAL }));
 });
@@ -143,7 +159,7 @@ app.post('/preview', (req, res) => {
 app.post('/submit', async (req, res) => {
   if (!sameOrigin(req)) return res.status(403).send('Forbidden');
   const { v, errors, dept, name, desig } = validate(req.body);
-  if (errors.dept || errors.name) return res.redirect(withMsg('/', null, 'Please choose a department and enter your name and designation.'));
+  if (errors.dept || errors.name) return res.redirect(startAgain(dept, name, desig));
   if (Object.keys(errors).length) return res.status(400).send(V.formPage({ dept, name, desig, v, errors, hospitalName: HOSPITAL }));
   const record = await prisma.submission.create({
     data: { department: dept, staffName: `${name}, ${desig}`, patientName: v.patient_name, hospitalNo: v.hospital_no, assessedAt: new Date(v.assessed_at), aphRisk: v.aph_risk || null, pphCategory: v.pph_category || null, data: v },
@@ -226,6 +242,68 @@ app.post('/admin/records/:id/regenerate', async (req, res) => {
   if (!record) return res.redirect('/admin');
   try { const out = await writePdf(record); res.redirect(withMsg(`/admin/records/${record.id}`, `PDF regenerated: ${out}`)); }
   catch (e) { log(`PDF regenerate FAILED for ${record.id}: ${e.message}`); res.redirect(withMsg(`/admin/records/${record.id}`, null, `PDF could not be written: ${e.message}`)); }
+});
+
+async function findRecord(req) {
+  const id = Number(req.params.id);
+  return Number.isInteger(id) && id > 0 ? prisma.submission.findUnique({ where: { id } }) : null;
+}
+
+app.get('/admin/records/:id/edit', async (req, res) => {
+  const admin = await currentAdmin(req);
+  if (!admin) return res.redirect('/admin');
+  const record = await findRecord(req);
+  if (!record) return res.status(404).send(V.errorPage({ status: 404, message: 'Record not found.', hospitalName: HOSPITAL, admin }));
+  res.send(V.formPage({ admin, recordId: record.id, staffName: record.staffName, dept: record.department, v: record.data, errors: {}, hospitalName: HOSPITAL }));
+});
+
+app.post('/admin/records/:id/edit', async (req, res) => {
+  const admin = await currentAdmin(req);
+  if (!admin || !sameOrigin(req)) return res.redirect('/admin');
+  const record = await findRecord(req);
+  if (!record) return res.redirect(withMsg('/admin', null, 'Record not found.'));
+  const { v, errors } = validateAnswers(req.body);
+  const dept = String(req.body.dept || '').trim();
+  const staffName = String(req.body.staff || '').trim().slice(0, 150);
+  if (!FORM.departments.includes(dept)) errors.dept = 'Please choose a department';
+  if (!staffName) errors.staff = 'Completed by is required';
+  if (Object.keys(errors).length) {
+    return res.status(400).send(V.formPage({ admin, recordId: record.id, staffName, dept: FORM.departments.includes(dept) ? dept : record.department, v, errors, hospitalName: HOSPITAL }));
+  }
+  const updated = await prisma.submission.update({
+    where: { id: record.id },
+    data: { department: dept, staffName, patientName: v.patient_name, hospitalNo: v.hospital_no, assessedAt: new Date(v.assessed_at), aphRisk: v.aph_risk || null, pphCategory: v.pph_category || null, data: v },
+  });
+  log(`admin ${admin.username} edited ${V.formNo(record.id)}`);
+  try {
+    const out = await writePdf(updated);
+    // file name follows hospital no./date/department, so drop the old file if it moved
+    if (record.pdfPath && path.resolve(record.pdfPath) !== path.resolve(out)) fs.rmSync(record.pdfPath, { force: true });
+    res.redirect(withMsg(`/admin/records/${record.id}`, 'Changes saved and the PDF was updated.'));
+  } catch (e) {
+    log(`PDF FAILED after edit of ${record.id}: ${e.message}`);
+    res.redirect(withMsg(`/admin/records/${record.id}`, 'Changes saved.', `PDF could not be written: ${e.message}`));
+  }
+});
+
+app.post('/admin/records/:id/delete', async (req, res) => {
+  const admin = await currentAdmin(req);
+  if (!admin || !sameOrigin(req)) return res.redirect('/admin');
+  const record = await findRecord(req);
+  if (!record) return res.redirect(withMsg('/admin', null, 'Record not found.'));
+  await prisma.submission.delete({ where: { id: record.id } });
+  let note = '';
+  if (record.pdfPath && fs.existsSync(record.pdfPath)) {
+    // keep a copy of the PDF out of the normal folders in case a delete was a mistake
+    try {
+      const bin = path.join(OUTPUT_DIR, '_deleted');
+      fs.mkdirSync(bin, { recursive: true });
+      fs.renameSync(record.pdfPath, path.join(bin, path.basename(record.pdfPath)));
+      note = ' Its PDF was moved to the _deleted folder.';
+    } catch (e) { log(`could not move PDF of deleted record ${record.id}: ${e.message}`); }
+  }
+  log(`admin ${admin.username} deleted ${V.formNo(record.id)} (${record.patientName}, ${record.hospitalNo})`);
+  res.redirect(withMsg('/admin', `${V.formNo(record.id)} for ${record.patientName} was deleted.${note}`));
 });
 
 app.get('/admin/export.csv', async (req, res) => {

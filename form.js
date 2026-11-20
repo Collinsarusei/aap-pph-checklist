@@ -14,7 +14,7 @@ const FORM = {
 
   header: [
     { id: 'patient_name', label: 'Patient Name', type: 'text', required: true },
-    { id: 'hospital_no', label: 'Hospital No.', type: 'text', required: true },
+    { id: 'hospital_no', label: 'Hospital No.', type: 'text', required: true, placeholder: "Patient's hospital number" },
     { id: 'gravida_para', label: 'Gravida/Para', type: 'text', placeholder: 'e.g. G3P2' },
     { id: 'gestation', label: 'Gestation (weeks)', type: 'number', min: 0, max: 45 },
     { id: 'assessed_at', label: 'Date/Time of Assessment', type: 'datetime', required: true },
