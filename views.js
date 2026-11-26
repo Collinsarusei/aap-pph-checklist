@@ -18,7 +18,10 @@ function layout({ title, body, hospitalName, admin = null, extraHead = '' }) {
 <body>
 <header class="topbar">
   <a class="brand" href="/">${esc(hospitalName)} · APH/PPH Risk Assessment</a>
-  ${admin ? `<nav><a href="/admin">Submissions</a><a href="/" target="_blank">New form</a></nav><span class="who">Admin: ${esc(admin.username)} <form method="post" action="/admin/logout"><button type="submit">Log out</button></form></span>` : `<a class="lock" href="/admin" title="Admin sign in" aria-label="Admin sign in"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Admin</span></a>`}
+  ${!admin ? `<a class="lock" href="/admin" title="Sign in (staff records or admin)" aria-label="Sign in"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Sign in</span></a>`
+    : admin.role === 'viewer'
+      ? `<nav><a href="/records">Patient records</a><a href="/">New form</a></nav><span class="who">Staff: ${esc(admin.username)} <form method="post" action="/admin/logout"><button type="submit">Log out</button></form></span>`
+      : `<nav><a href="/admin">Submissions</a><a href="/" target="_blank">New form</a></nav><span class="who">Admin: ${esc(admin.username)} <form method="post" action="/admin/logout"><button type="submit">Log out</button></form></span>`}
 </header>
 <main>${body}</main>
 </body></html>`;
@@ -60,6 +63,7 @@ function startPage({ hospitalName, error, pre = {} }) {
       </div>
       <div class="actions"><button class="btn" type="submit">Open the checklist</button></div>
     </form>
+    <p class="hint" style="margin-top:16px">Looking for a form that was already filled? <a href="/records">Search patient records</a> (staff sign-in needed).</p>
   </div>
   <script>
   (function () {
@@ -336,7 +340,7 @@ function successPage({ record, pdfUrl, hospitalName, name, desig }) {
   <div class="card start">
     <h1>Saved</h1>
     <div class="success">Assessment <b>${esc(formNo(record.id))}</b> for <b>${esc(record.patientName)}</b> (Hospital No. ${esc(record.hospitalNo)}) has been filed under ${esc(record.department)}.</div>
-    ${record.pdfPath ? `<p><a class="btn" href="${esc(pdfUrl)}" target="_blank">Open the PDF</a> <span class="hint">(this link works for 12 hours)</span></p>` : '<div class="error">The record was saved but the PDF file could not be written. Please tell ICT; they can regenerate it.</div>'}
+    ${record.pdfPath ? `<div class="actions"><a class="btn" href="${esc(pdfUrl)}&download=1" download>Download PDF</a> <a class="btn secondary" href="${esc(pdfUrl)}" target="_blank">Open the PDF</a></div><p class="hint">Download the PDF to attach it in HMIS. These buttons work for 12 hours; after that an administrator can get the PDF from /admin.</p>` : '<div class="error">The record was saved but the PDF file could not be written. Please tell ICT; they can regenerate it.</div>'}
     <div class="actions" style="margin-top:20px"><a class="btn secondary" href="/form?${staffQS(record.department, name, desig)}">Fill another form</a> <a class="btn secondary" href="/">Start page</a></div>
   </div>
   <script>try { localStorage.removeItem('aphpph:draft'); } catch (e) {}</script>` });
@@ -347,9 +351,10 @@ const EYE = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke=
 const EYE_OFF = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`;
 
 function adminLoginPage({ hospitalName, error }) {
-  return layout({ title: 'Admin log in', hospitalName, body: `
+  return layout({ title: 'Sign in', hospitalName, body: `
   <div class="card login">
-    <h1>Admin log in</h1>
+    <h1>Sign in</h1>
+    <p class="note">Staff accounts can search patients and download filled forms. Admin accounts can also edit and delete.</p>
     ${error ? `<div class="error">${esc(error)}</div>` : ''}
     <form method="post" action="/admin/login">
       <div class="field"><label for="u">Username</label><input id="u" type="text" name="username" autocomplete="username" autofocus required></div>
@@ -398,7 +403,7 @@ function adminList({ admin, rows, f, hospitalName, q }) {
         <td>${esc(r.aphRisk || '')}</td>
         <td><span class="badge ${esc(r.pphCategory || '')}">${esc(r.pphCategory || '')}</span></td>
         <td>${esc(fmtDT(r.createdAt))}</td>
-        <td>${r.pdfPath ? `<a href="/pdf/${r.id}" target="_blank">Open</a>` : '<span class="muted">missing</span>'}</td>
+        <td style="white-space:nowrap">${r.pdfPath ? `<a href="/pdf/${r.id}" target="_blank">Open</a> · <a href="/pdf/${r.id}?download=1" download>Download</a>` : '<span class="muted">missing</span>'}</td>
         <td style="white-space:nowrap"><a class="btn small secondary" href="/admin/records/${r.id}">View</a> <a class="btn small secondary" href="/admin/records/${r.id}/edit">Edit</a></td>
       </tr>`).join('')}
       </tbody>
@@ -412,7 +417,7 @@ function adminRecord({ admin, record, hospitalName, q }) {
   ${q.msg ? `<div class="success">${esc(q.msg)}</div>` : ''}${q.err ? `<div class="error">${esc(q.err)}</div>` : ''}
   <div class="card">
     <div class="actions">
-      ${record.pdfPath ? `<a class="btn" href="/pdf/${record.id}" target="_blank">Open PDF</a>` : '<span class="muted">No PDF stored.</span>'}
+      ${record.pdfPath ? `<a class="btn" href="/pdf/${record.id}?download=1" download>Download PDF</a> <a class="btn secondary" href="/pdf/${record.id}" target="_blank">Open PDF</a>` : '<span class="muted">No PDF stored.</span>'}
       <form method="post" action="/admin/records/${record.id}/regenerate"><button class="btn secondary" type="submit">Regenerate PDF</button></form>
       <a class="btn secondary" href="/admin/records/${record.id}/edit">Edit</a>
       <a class="btn secondary" href="/admin">Back to list</a>
@@ -433,8 +438,54 @@ function adminRecord({ admin, record, hospitalName, q }) {
   </script>` });
 }
 
+// ---------------------------------------------------------------- staff records (read-only)
+function recordsPage({ user, rows, f, searched, hospitalName }) {
+  const opt = (v, cur, label) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(label ?? v)}</option>`;
+  return layout({ title: 'Patient records', hospitalName, admin: user, body: `
+  <div class="card">
+    <h1>Patient records</h1>
+    <p class="note">Search by patient name or hospital number, then open or download the filled form. Records here cannot be changed.</p>
+    <form method="get" action="/records" class="filters">
+      <div style="flex:1;min-width:220px"><label for="rq">Patient name or Hospital No.</label><input id="rq" type="text" name="q" value="${esc(f.q)}" placeholder="e.g. Mary Wanjiru or 24680" autofocus></div>
+      <div><label>Department</label><select name="dept">${opt('', f.dept, 'All')}${FORM.departments.map((d) => opt(d, f.dept)).join('')}</select></div>
+      <div><label>From</label><input type="date" name="from" value="${esc(f.from)}"></div>
+      <div><label>To</label><input type="date" name="to" value="${esc(f.to)}"></div>
+      <div><button class="btn" type="submit">Search</button> ${searched ? '<a class="btn secondary" href="/records">Clear</a>' : ''}</div>
+    </form>
+    <table>
+      <thead><tr><th>Form No.</th><th>Assessed</th><th>Hospital No.</th><th>Patient</th><th>Dept</th><th>Filled by</th><th>PPH category</th><th>Form</th></tr></thead>
+      <tbody>
+      ${rows.length === 0 ? `<tr><td colspan="8" class="muted">${searched ? 'No filled forms match this search.' : 'No filled forms yet.'}</td></tr>` : ''}
+      ${rows.map((r) => `<tr>
+        <td>${esc(formNo(r.id))}</td>
+        <td>${esc(fmtDT(r.assessedAt))}</td>
+        <td>${esc(r.hospitalNo)}</td>
+        <td><a href="/records/${r.id}">${esc(r.patientName)}</a></td>
+        <td>${esc(r.department)}</td>
+        <td>${esc(r.staffName)}</td>
+        <td><span class="badge ${esc(r.pphCategory || '')}">${esc(r.pphCategory || '')}</span></td>
+        <td style="white-space:nowrap"><a class="btn small secondary" href="/records/${r.id}">View</a> ${r.pdfPath ? `<a class="btn small" href="/pdf/${r.id}?download=1" download>Download</a>` : '<span class="muted">no PDF</span>'}</td>
+      </tr>`).join('')}
+      </tbody>
+    </table>
+    <p class="hint">${searched ? `${rows.length} matching form(s), newest first (max 200).` : `The ${rows.length} most recent form(s). Search to find older ones.`}</p>
+  </div>` });
+}
+
+function recordView({ user, record, hospitalName, q }) {
+  const back = user.role === 'viewer' ? '/records' : '/admin';
+  return layout({ title: formNo(record.id), hospitalName, admin: user, extraHead: `<style>${PRINT_CSS}</style>`, body: `
+  <div class="card">
+    <div class="actions">
+      ${record.pdfPath ? `<a class="btn" href="/pdf/${record.id}?download=1" download>Download PDF</a> <a class="btn secondary" href="/pdf/${record.id}" target="_blank">Open PDF</a>` : '<span class="muted">No PDF stored. Ask ICT to regenerate it.</span>'}
+      <a class="btn secondary" href="${back}">Back to search</a>
+    </div>
+  </div>
+  <div class="card">${printBody(record.data, { hospitalName, department: record.department, staffName: record.staffName, recordId: record.id, savedAt: record.createdAt })}</div>` });
+}
+
 function errorPage({ status, message, hospitalName, admin }) {
   return layout({ title: `Error ${status}`, hospitalName, admin, body: `<div class="card"><h1>${status}</h1><p>${esc(message)}</p><p><a href="/">Start page</a></p></div>` });
 }
 
-module.exports = { esc, formNo, fmtDT, startPage, formPage, previewPage, successPage, adminLoginPage, adminList, adminRecord, errorPage, printBody };
+module.exports = { esc, formNo, fmtDT, startPage, formPage, previewPage, successPage, adminLoginPage, adminList, adminRecord, recordsPage, recordView, errorPage, printBody };

@@ -11,6 +11,7 @@ model Admin {
   id           Int            @id @default(autoincrement())
   username     String         @unique
   passwordHash String
+  role         String         @default("admin") // "admin" or "viewer" (staff: search and download only)
   createdAt    DateTime       @default(now())
   sessions     AdminSession[]
 }

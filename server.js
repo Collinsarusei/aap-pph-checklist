@@ -115,13 +115,18 @@ async function writePdf(record) {
 }
 
 // ---------------------------------------------------------------- admin sessions
-async function currentAdmin(req) {
+async function currentUser(req) {
   const sid = cookies(req).admin_sid;
   if (!sid) return null;
   const s = await prisma.adminSession.findUnique({ where: { id: sid }, include: { admin: true } });
   if (!s) return null;
   if (s.expiresAt < new Date()) { await prisma.adminSession.delete({ where: { id: sid } }).catch(() => {}); return null; }
   return s.admin;
+}
+// Admin pages: full access. Viewer accounts only get /records and the PDFs.
+async function currentAdmin(req) {
+  const u = await currentUser(req);
+  return u && u.role !== 'viewer' ? u : null;
 }
 const loginFails = new Map();
 function loginBlocked(ip) { const f = loginFails.get(ip); return f && f.count >= 10 && Date.now() - f.last < 5 * 60e3; }
@@ -172,17 +177,22 @@ app.post('/submit', async (req, res) => {
 
 app.get('/pdf/:id', async (req, res) => {
   const id = Number(req.params.id);
-  const admin = await currentAdmin(req);
+  const admin = await currentUser(req);
   if (!admin && !checkPdfToken(SECRET, id, req.query.t)) return res.status(403).send(V.errorPage({ status: 403, message: 'This PDF link has expired. Ask an administrator to open it from /admin.', hospitalName: HOSPITAL }));
   const r = await prisma.submission.findUnique({ where: { id } });
   if (!r || !r.pdfPath || !fs.existsSync(r.pdfPath)) return res.status(404).send(V.errorPage({ status: 404, message: 'PDF not found. An administrator can regenerate it.', hospitalName: HOSPITAL, admin }));
-  res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="${path.basename(r.pdfPath)}"` });
+  if (admin && admin.role === 'viewer') log(`${admin.username} ${req.query.download ? 'downloaded' : 'opened'} PDF of ${V.formNo(r.id)}`);
+  // ?download=1 saves the file (for attaching in HMIS); otherwise it opens in the browser.
+  const how = req.query.download ? 'attachment' : 'inline';
+  res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `${how}; filename="${path.basename(r.pdfPath)}"` });
   fs.createReadStream(r.pdfPath).pipe(res);
 });
 
 // ---------------------------------------------------------------- admin
 app.get('/admin', async (req, res) => {
-  const admin = await currentAdmin(req);
+  const user = await currentUser(req);
+  if (user && user.role === 'viewer') return res.redirect('/records');
+  const admin = user;
   if (!admin) return res.send(V.adminLoginPage({ hospitalName: HOSPITAL }));
   const f = { q: String(req.query.q || ''), dept: String(req.query.dept || ''), cat: String(req.query.cat || ''), from: String(req.query.from || ''), to: String(req.query.to || '') };
   const rows = await prisma.submission.findMany({ where: filterWhere(f), orderBy: [{ assessedAt: 'desc' }, { id: 'desc' }], take: 500 });
@@ -217,7 +227,7 @@ app.post('/admin/login', async (req, res) => {
   await prisma.adminSession.create({ data: { id: sid, adminId: admin.id, expiresAt: new Date(Date.now() + SESSION_HOURS * 3600e3) } });
   await prisma.adminSession.deleteMany({ where: { expiresAt: { lt: new Date() } } });
   res.cookie('admin_sid', sid, { httpOnly: true, sameSite: 'lax', path: '/', maxAge: SESSION_HOURS * 3600e3 });
-  res.redirect('/admin');
+  res.redirect(admin.role === 'viewer' ? '/records' : '/admin');
 });
 
 app.post('/admin/logout', async (req, res) => {
@@ -242,6 +252,25 @@ app.post('/admin/records/:id/regenerate', async (req, res) => {
   if (!record) return res.redirect('/admin');
   try { const out = await writePdf(record); res.redirect(withMsg(`/admin/records/${record.id}`, `PDF regenerated: ${out}`)); }
   catch (e) { log(`PDF regenerate FAILED for ${record.id}: ${e.message}`); res.redirect(withMsg(`/admin/records/${record.id}`, null, `PDF could not be written: ${e.message}`)); }
+});
+
+// ---------------------------------------------------------------- staff records (viewer or admin)
+app.get('/records', async (req, res) => {
+  const user = await currentUser(req);
+  if (!user) return res.send(V.adminLoginPage({ hospitalName: HOSPITAL }));
+  const f = { q: String(req.query.q || '').trim(), dept: String(req.query.dept || ''), cat: '', from: String(req.query.from || ''), to: String(req.query.to || '') };
+  const searched = Boolean(f.q || f.dept || f.from || f.to);
+  const rows = await prisma.submission.findMany({ where: filterWhere(f), orderBy: [{ assessedAt: 'desc' }, { id: 'desc' }], take: searched ? 200 : 30 });
+  res.send(V.recordsPage({ user, rows, f, searched, hospitalName: HOSPITAL }));
+});
+
+app.get('/records/:id', async (req, res) => {
+  const user = await currentUser(req);
+  if (!user) return res.redirect('/records');
+  const record = await findRecord(req);
+  if (!record) return res.status(404).send(V.errorPage({ status: 404, message: 'Record not found.', hospitalName: HOSPITAL, admin: user }));
+  if (user.role === 'viewer') log(`${user.username} viewed ${V.formNo(record.id)}`);
+  res.send(V.recordView({ user, record, hospitalName: HOSPITAL, q: req.query }));
 });
 
 async function findRecord(req) {
