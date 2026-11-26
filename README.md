@@ -10,10 +10,11 @@ the page is closed before submitting, the next visit offers to continue it.
 **On submit:** the record goes into PostgreSQL and a PDF is written to the shared folder as
 `<OUTPUT_DIR>\<Department>\<YYYY>\<MM>\<HospitalNo>_<date>_<time>_MAT-CLIN-000123.pdf`.
 
-**Staff records (`/records`):** staff sign in with a viewer account made by `create-viewer.bat`
-(one per person, or one shared per ward). They can search patients by name or hospital number, view
-filled forms, and open or download the PDF (e.g. to attach in HMIS). They cannot edit, delete or
-export. Every view and download is written to the log with the account name.
+**Search patient (`/records`, no sign-in):** the **Search patient** button on the start page (and in
+the top bar) opens a search by patient name or hospital number. Staff can view filled forms and open
+or download the PDF (e.g. to attach in HMIS), but cannot edit, delete or export. Every view and
+download is written to the log with the computer's IP address. Anyone on the hospital network can use
+it, so keep the app reachable only inside the LAN.
 
 **Admin (`/admin`):** account created with `create-admin.bat`. Sees every submission, with search,
 filters, PDF links, record view, PDF regeneration and CSV export. Admins can also **edit** a
@@ -44,7 +45,6 @@ Stack: Node.js, Express, PostgreSQL, Prisma. PDFs are drawn by the app itself (n
    once, creates `maternity_forms`, then runs the Prisma migrations.
 5. Create the admin account: double-click **create-admin.bat** (asks for username and password,
    typing hidden) or run `create-admin.bat <username> <password>`. Run it again later to reset a password.
-   For staff who should only search and download, use **create-viewer.bat** the same way.
 6. Start it and keep it running: double-click **pm2-start.bat**. It starts the app under PM2,
    saves the process list and registers PM2 to start at Windows boot, so the form comes back by
    itself after a restart or a crash. Then open `http://localhost:8080` and `http://localhost:8080/admin`.
@@ -93,9 +93,8 @@ able to write to it (the startup entry is created for the same account).
 | `form.js`             | the checklist definition                         |
 | `views.js`            | HTML pages (start, form, preview, admin)         |
 | `pdfgen.js`           | built-in PDF writer                              |
-| `auth.js`             | password hashing and PDF link tokens             |
+| `auth.js`             | password hashing                                 |
 | `create-admin.js/.bat`| create or reset an admin account                 |
-| `create-viewer.bat`   | create or reset a staff (search/download) account |
 | `prisma/schema.prisma`| database schema; `prisma/migrations` the tables  |
 | `ecosystem.config.js` | PM2 process definition                           |
 | `pm2-*.bat`           | start / stop / restart under PM2                 |

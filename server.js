@@ -13,7 +13,7 @@ try { process.loadEnvFile(path.join(__dirname, '.env')); } catch { /* environmen
 const V = require('./views');
 const { FORM, allFields } = require('./form');
 const { renderRecordPdf } = require('./pdfgen');
-const { verifyPassword, pdfToken, checkPdfToken } = require('./auth');
+const { verifyPassword } = require('./auth');
 
 const HOSPITAL = process.env.HOSPITAL_NAME || 'Hospital';
 const PORT = Number(process.env.PORT || 8080);
@@ -123,7 +123,7 @@ async function currentUser(req) {
   if (s.expiresAt < new Date()) { await prisma.adminSession.delete({ where: { id: sid } }).catch(() => {}); return null; }
   return s.admin;
 }
-// Admin pages: full access. Viewer accounts only get /records and the PDFs.
+// Admin pages. (Old "viewer" accounts, if any, are not admins.)
 async function currentAdmin(req) {
   const u = await currentUser(req);
   return u && u.role !== 'viewer' ? u : null;
@@ -172,16 +172,16 @@ app.post('/submit', async (req, res) => {
   let pdfPath = null;
   try { pdfPath = await writePdf(record); log(`saved ${V.formNo(record.id)} by ${name}, ${desig} (${dept}) -> ${pdfPath}`); }
   catch (e) { log(`PDF FAILED for ${V.formNo(record.id)}: ${e.message}`); }
-  res.send(V.successPage({ record: { ...record, pdfPath }, pdfUrl: `/pdf/${record.id}?t=${pdfToken(SECRET, record.id)}`, hospitalName: HOSPITAL, name, desig }));
+  res.send(V.successPage({ record: { ...record, pdfPath }, pdfUrl: `/pdf/${record.id}`, hospitalName: HOSPITAL, name, desig }));
 });
 
 app.get('/pdf/:id', async (req, res) => {
   const id = Number(req.params.id);
-  const admin = await currentUser(req);
-  if (!admin && !checkPdfToken(SECRET, id, req.query.t)) return res.status(403).send(V.errorPage({ status: 403, message: 'This PDF link has expired. Ask an administrator to open it from /admin.', hospitalName: HOSPITAL }));
-  const r = await prisma.submission.findUnique({ where: { id } });
+  // Open to everyone on the hospital network (staff search patients without signing in).
+  const admin = await currentAdmin(req);
+  const r = Number.isInteger(id) && id > 0 ? await prisma.submission.findUnique({ where: { id } }) : null;
   if (!r || !r.pdfPath || !fs.existsSync(r.pdfPath)) return res.status(404).send(V.errorPage({ status: 404, message: 'PDF not found. An administrator can regenerate it.', hospitalName: HOSPITAL, admin }));
-  if (admin && admin.role === 'viewer') log(`${admin.username} ${req.query.download ? 'downloaded' : 'opened'} PDF of ${V.formNo(r.id)}`);
+  if (!admin) log(`${req.socket.remoteAddress} ${req.query.download ? 'downloaded' : 'opened'} PDF of ${V.formNo(r.id)}`);
   // ?download=1 saves the file (for attaching in HMIS); otherwise it opens in the browser.
   const how = req.query.download ? 'attachment' : 'inline';
   res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `${how}; filename="${path.basename(r.pdfPath)}"` });
@@ -254,10 +254,9 @@ app.post('/admin/records/:id/regenerate', async (req, res) => {
   catch (e) { log(`PDF regenerate FAILED for ${record.id}: ${e.message}`); res.redirect(withMsg(`/admin/records/${record.id}`, null, `PDF could not be written: ${e.message}`)); }
 });
 
-// ---------------------------------------------------------------- staff records (viewer or admin)
+// ---------------------------------------------------------------- patient search (no sign-in)
 app.get('/records', async (req, res) => {
-  const user = await currentUser(req);
-  if (!user) return res.send(V.adminLoginPage({ hospitalName: HOSPITAL }));
+  const user = await currentAdmin(req);
   const f = { q: String(req.query.q || '').trim(), dept: String(req.query.dept || ''), cat: '', from: String(req.query.from || ''), to: String(req.query.to || '') };
   const searched = Boolean(f.q || f.dept || f.from || f.to);
   const rows = await prisma.submission.findMany({ where: filterWhere(f), orderBy: [{ assessedAt: 'desc' }, { id: 'desc' }], take: searched ? 200 : 30 });
@@ -265,11 +264,10 @@ app.get('/records', async (req, res) => {
 });
 
 app.get('/records/:id', async (req, res) => {
-  const user = await currentUser(req);
-  if (!user) return res.redirect('/records');
+  const user = await currentAdmin(req);
   const record = await findRecord(req);
   if (!record) return res.status(404).send(V.errorPage({ status: 404, message: 'Record not found.', hospitalName: HOSPITAL, admin: user }));
-  if (user.role === 'viewer') log(`${user.username} viewed ${V.formNo(record.id)}`);
+  if (!user) log(`${req.socket.remoteAddress} viewed ${V.formNo(record.id)}`);
   res.send(V.recordView({ user, record, hospitalName: HOSPITAL, q: req.query }));
 });
 

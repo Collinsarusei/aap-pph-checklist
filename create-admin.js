@@ -1,8 +1,7 @@
 'use strict';
-// Creates (or resets the password of) an account.
-//   node create-admin.js                      -> admin; asks for username and password
+// Creates (or resets the password of) an admin account.
+//   node create-admin.js                      -> asks for username and password
 //   node create-admin.js <username> <password>
-//   node create-admin.js --viewer [username] [password]   -> staff viewer (search and download only)
 const readline = require('node:readline');
 const { PrismaClient } = require('@prisma/client');
 const { hashPassword } = require('./auth');
@@ -23,9 +22,9 @@ function ask(question, { hidden = false } = {}) {
 
 (async () => {
   const args = process.argv.slice(2);
-  const role = args.includes('--viewer') ? 'viewer' : 'admin';
-  const kind = role === 'viewer' ? 'Staff viewer' : 'Admin';
-  let [username, password] = args.filter((a) => a !== '--viewer');
+  const role = 'admin';
+  const kind = 'Admin';
+  let [username, password] = args;
   if (!username) username = await ask(`${kind} username: `);
   if (!password) {
     password = await ask('Password (typing is hidden): ', { hidden: true });
@@ -45,7 +44,7 @@ function ask(question, { hidden = false } = {}) {
     });
     if (existing) await prisma.adminSession.deleteMany({ where: { adminId: existing.id } });
     console.log(existing ? `${kind} account "${username}" updated (new password).` : `${kind} account "${username}" created.`);
-    console.log(role === 'viewer' ? 'Sign in at http://<server>:<port>/records  (search, view and download filled forms only)' : 'Sign in at http://<server>:<port>/admin');
+    console.log('Sign in at http://<server>:<port>/admin');
   } finally {
     await prisma.$disconnect();
   }
